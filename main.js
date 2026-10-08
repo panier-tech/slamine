@@ -13,45 +13,61 @@ const MINE_COUNT = Number(process.env.SLAMINE_MINES ?? 10);
 function renderMap(game) {
   const state = game.getState();
 
-  const header = [
-    "   ",
-    ...Array.from(
-      { length: state.width },
-      (_, x) => String(x).padStart(2, " "),
-    ),
-  ].join(" ");
+  const numbers = [
+    ":white_large_square:",
+    ":one:",
+    ":two:",
+    ":three:",
+    ":four:",
+    ":five:",
+    ":six:",
+    ":seven:",
+    ":eight:",
+  ];
 
-  const lines = [header];
+  const coordinates = [
+    ":0:",
+    ":1:",
+    ":2:",
+    ":3:",
+    ":4:",
+    ":5:",
+    ":6:",
+    ":7:",
+    ":8:",
+  ];
+
+  const lines = [
+    [
+      ":black:",
+      ...coordinates,
+    ].join(""),
+  ];
 
   for (let y = 0; y < state.height; y++) {
     const cells = state.board[y].map((cell) => {
       if (cell.mine && cell.opened) {
-        return "*";
+        return ":boom:";
       }
 
       if (cell.flagged) {
-        return "F";
+        return ":triangular_flag_on_post:";
       }
 
       if (!cell.opened) {
-        return "#";
+        return ":hash:";
       }
 
-      if (cell.adjacentMines === 0) {
-        return " ";
-      }
-
-      return String(cell.adjacentMines);
+      return numbers[cell.adjacentMines];
     });
 
-    lines.push(
-      `${String(y).padStart(2, " ")} ${cells
-        .map((cell) => cell.padStart(2, " "))
-        .join(" ")}`,
-    );
+    lines.push([
+      coordinates[y],
+      ...cells,
+    ].join(""));
   }
 
-  return `\`\`\`\n${lines.join("\n")}\n\`\`\``;
+  return lines.join("\n");
 }
 
 async function loadOrCreateGame() {
@@ -64,17 +80,35 @@ async function loadOrCreateGame() {
 }
 
 async function main() {
-  const game = await loadOrCreateGame();
+  let game = await loadOrCreateGame();
 
   const slack = new Slack({
     width: game.width,
     height: game.height,
   });
 
-  while (game.state === "playing") {
-    await slack.postMap(renderMap(game));
+  await slack.postNewMap(renderMap(game));
+
+  while (true) {
+    if (game.state !== "playing") {
+      await slack.postMap(renderMap(game));
+      break;
+    }
 
     const input = await slack.waitForInput();
+
+    if (input.type === "reset") {
+      game = new Minesweeper(WIDTH, HEIGHT, MINE_COUNT);
+
+      await saveGame(STATE_PATH, game);
+
+      slack.width = game.width;
+      slack.height = game.height;
+
+      await slack.postNewMap(renderMap(game));
+
+      continue;
+    }
 
     let changed;
 
@@ -84,15 +118,17 @@ async function main() {
       changed = game.open(input.column, input.row);
     }
 
-    if (changed) {
-      await saveGame(STATE_PATH, game);
+    if (!changed) {
+      continue;
     }
-  }
 
-  await slack.postMap(renderMap(game));
+    await saveGame(STATE_PATH, game);
+    await slack.postMap(renderMap(game));
+  }
 }
 
 main().catch((error) => {
   console.error(error);
   process.exitCode = 1;
 });
+
