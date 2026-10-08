@@ -1,7 +1,7 @@
 const SLACK_TOKEN = process.env.SLACK_TOKEN;
 const SLAMINE_CHANNEL_ID = process.env.SLAMINE_CHANNEL_ID;
 
-const INTERVAL = 60 * 1000;
+const INTERVAL = 10 * 1000;
 
 function checkEnvironment() {
   if (!SLACK_TOKEN) {
@@ -36,74 +36,6 @@ async function slackApi(method, params = {}) {
   return data;
 }
 
-async function postMessage(text, threadTs = null) {
-  const params = {
-    channel: SLAMINE_CHANNEL_ID,
-    text,
-  };
-
-  if (threadTs !== null) {
-    params.thread_ts = threadTs;
-  }
-
-  const data = await slackApi("chat.postMessage", params);
-
-  return data.ts;
-}
-
-function formatUsage() {
-  return [
-    "使い方:",
-    "[行] [列] [行動]",
-    "",
-    "行・列: 0 ~ mapの列数",
-    "行動:",
-    "f: 旗を置く",
-    "o: マスを開く",
-    "",
-    "例:",
-    "2 1 f",
-  ].join("\n");
-}
-
-function parseInput(text, width, height) {
-  const match = text.trim().match(/^(\d+)\s+(\d+)\s+([fo])$/i);
-
-  if (!match) {
-    return null;
-  }
-
-  const row = Number(match[1]);
-  const column = Number(match[2]);
-  const action = match[3].toLowerCase();
-
-  if (
-    row < 0 ||
-    row >= height ||
-    column < 0 ||
-    column >= width
-  ) {
-    return null;
-  }
-
-  return {
-    row,
-    column,
-    action,
-  };
-}
-
-function reactionCount(message) {
-  if (!message.reactions) {
-    return 0;
-  }
-
-  return message.reactions.reduce(
-    (count, reaction) => count + (reaction.count ?? 0),
-    0,
-  );
-}
-
 async function getReplies(threadTs) {
   const params = new URLSearchParams({
     channel: SLAMINE_CHANNEL_ID,
@@ -132,6 +64,85 @@ async function getReplies(threadTs) {
   }
 
   return data.messages ?? [];
+}
+
+async function postMessage(text, threadTs = null) {
+  const params = {
+    channel: SLAMINE_CHANNEL_ID,
+    text,
+  };
+
+  if (threadTs !== null) {
+    params.thread_ts = threadTs;
+  }
+
+  const data = await slackApi("chat.postMessage", params);
+
+  return data.ts;
+}
+
+function formatUsage() {
+  return [
+    "使い方:",
+    "[行] [列] [行動]",
+    "",
+    "行・列: 0 ~ mapのサイズ - 1",
+    "行動:",
+    "f: 旗を置く",
+    "o: マスを開く",
+    "",
+    "例:",
+    "2 1 f",
+    "",
+    "map-reset: mapをリセット",
+  ].join("\n");
+}
+
+function parseInput(text, width, height) {
+  const value = text.trim();
+
+  if (value === "map-reset") {
+    return {
+      type: "reset",
+    };
+  }
+
+  const match = value.match(/^(\d+)\s+(\d+)\s+([fo])$/i);
+
+  if (!match) {
+    return null;
+  }
+
+  const row = Number(match[1]);
+  const column = Number(match[2]);
+  const action = match[3].toLowerCase();
+
+  if (
+    row < 0 ||
+    row >= height ||
+    column < 0 ||
+    column >= width
+  ) {
+    return null;
+  }
+
+  return {
+    type: "move",
+    row,
+    column,
+    action,
+  };
+}
+
+function reactionCount(message) {
+  if (!message.reactions) {
+    return 0;
+  }
+
+  return message.reactions.reduce(
+    (count, reaction) => count + (reaction.count ?? 0),
+    0,
+  );
 }
 
 function selectInput(messages, width, height, processed) {
@@ -166,14 +177,7 @@ function selectInput(messages, width, height, processed) {
     return Number(a.ts) - Number(b.ts);
   });
 
-  const selected = inputs[0];
-
-  return {
-    row: selected.row,
-    column: selected.column,
-    action: selected.action,
-    ts: selected.ts,
-  };
+  return inputs[0];
 }
 
 export class Slack {
@@ -194,13 +198,19 @@ export class Slack {
     this.processed = new Set();
   }
 
-  async postMap(map) {
-    const threadTs = await postMessage(map);
+  async postNewMap(map) {
+    const text = `${map}\n\n${formatUsage()}`;
 
-    this.threadTs = threadTs;
+    this.threadTs = await postMessage(text);
     this.processed.clear();
+  }
 
-    await postMessage(formatUsage(), threadTs);
+  async postMap(map) {
+    if (this.threadTs === null) {
+      throw new Error("Map has not been posted");
+    }
+
+    await postMessage(map, this.threadTs);
   }
 
   async poll() {
@@ -223,11 +233,7 @@ export class Slack {
 
     this.processed.add(input.ts);
 
-    return {
-      row: input.row,
-      column: input.column,
-      action: input.action,
-    };
+    return input;
   }
 
   async waitForInput() {

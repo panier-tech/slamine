@@ -27,16 +27,18 @@ export class Minesweeper {
   }
 
   static fromState(state) {
-    const game = Object.create(Minesweeper.prototype);
+    const game = new Minesweeper(
+      state.width,
+      state.height,
+      state.mineCount,
+    );
 
-    game.width = state.width;
-    game.height = state.height;
-    game.mineCount = state.mineCount;
     game.state = state.state;
     game.board = state.board;
 
     return game;
   }
+
 
   open(x, y) {
     if (!this.#inside(x, y) || this.state !== "playing") {
